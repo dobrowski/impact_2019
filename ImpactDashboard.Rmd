@@ -1,0 +1,820 @@
+---
+title: "Ed Services Data, Research and Partnerships Outcomes for 2018-19"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: scroll
+    theme: sandstone
+    
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(error = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(comment = FALSE)
+
+
+library(flexdashboard)
+   library(       rtweet)
+   library(       tidyverse)
+     library(     tidygraph)
+     library(     ggraph)
+   library(       igraph) #  twitter network
+   library(       visNetwork) #  twitter network
+library(tidytext)  # twitter top word analysis
+library(ggthemes)  
+  library(here)
+       library(janitor)
+      library(scales)  # scales for map graph 
+library(readxl)  # read excel files in math section
+library(ggalt)  #dumbell graph
+
+pacman::p_load(tidycensus
+        ,tigris
+        ,sf
+        ,here
+        ,mapview
+        ,ggmap
+        ,tmap)
+
+
+`%notin%` = Negate(`%in%`)
+
+
+options(tigris_class = "sf")
+options(tigris_use_cache = TRUE)
+
+
+```
+
+
+Page 1: State Accountability Data
+============================================
+
+Column {data-width=150}
+-------------------------------------
+
+The graphs on this page display some of the ways in which we have tried to compile accountability data into new ways to look at it. The following tabs present other areas of work. 
+
+The first graph calculated which schools in Monterey County were eligble for Comprehensive Support and Improvement (CSI) under ESSA, prior to CDE releasing a list of eligible schools.  It is intended to convey which schools are eligible and the criteria qualifying their eligibility -- either Dashboard Indicators or Graduation rate.
+
+The second graph was used to show the changes over two years in the percent of students meeting or exceeding standards on Math CAASPP testing.  Red shows the percentage in 2015-16, Orange shows the percentage in 2016-17, and Blue shows the percentage in 2017-18.  It is ordered by district from those making the most improvement from 2015-16 to 2017-18 to those making the least. 
+
+The third graph was used to show Chronic Absenteeism rates by subgroup and by school. The darker areas show higher levels of chronic absenteeism.  The viewer can quickly identify patterns across subgroups or schools and can also see specific rates as they are interested.  
+
+
+Column
+-------------------------------------
+
+### CSI list {data-height=600}
+
+```{r fig.width=10,fig.height=6}
+
+pal <- c("0" = "white",
+         "1" = "red",
+         "2" = "orange",
+         "3" = "yellow",
+         "4" = "green",
+         "5" = "blue",
+         "Graduation Rate Below 67%" = alpha("light grey", alpha = 0.3),
+         "Lowest 5%" = alpha( "white", alpha = 0.3))
+
+grad2017 <- read.delim( here("data","2017", "graddownload2017f.txt") )
+
+all <- readRDS(here("data" ,"01_all-school-dashboard-2018.rds") )
+
+
+all.mc.schools <- all %>% 
+        filter(color >= 1) %>%
+        filter( str_detect( countyname, "Monterey") ) %>% 
+        filter(studentgroup == "ALL") %>%
+        filter(rtype == "S") %>%
+        select(districtname, schoolname, ind, studentgroup, color, color.factor, currstatus, priorstatus) %>% 
+        group_by(districtname, schoolname) %>% 
+        arrange(districtname, schoolname)
+
+
+CSI.list2 <- all.mc.schools %>% 
+        group_by(districtname, schoolname) %>% 
+        arrange(districtname, schoolname) %>% 
+        mutate(reds = sum(color.factor == "1"),
+               oranges = sum(color.factor == "2"),
+               total = max( row_number() ) ,
+               CSI.all.reds = if_else(reds == total, 1, 0),
+               CSI.all.red.but.one = if_else(total >=2 & total - reds == 1, 1, 0),
+               CSI.all.red.or.orange = if_else( reds >=1  & reds + oranges == total, 1, 0),
+               CSI.5.more.majority = if_else( (total >= 5) & ((reds/total) >.5) , 1, 0 ) ,
+               two.year = (currstatus + priorstatus)/2 ,
+               CSI.grad = if_else( ind == "grad" & two.year < 67, 1, 0    ),
+               CSI.grad = sum(CSI.grad)) %>% 
+        mutate(CSI = if_else( sum(CSI.all.reds, CSI.all.red.but.one, CSI.all.red.or.orange, CSI.5.more.majority, CSI.grad) > 0, "Y", "N") ) %>% 
+        select(districtname, schoolname, reds, oranges, total, starts_with("CSI")) %>%
+        distinct() %>%
+        filter(CSI == "Y") %>%
+        arrange(desc(CSI), districtname, schoolname) %>%
+        filter(!str_detect(schoolname, "Special"))
+               
+
+
+
+
+write_csv(CSI.list2, here("data", "CSIlist.csv" ) )
+
+
+
+CSI.list3 <- CSI.list2 %>%
+        select(districtname, schoolname, CSI.grad) %>%
+        left_join(all.mc.schools) %>%
+        mutate(Reason = if_else(CSI.grad == 1, "Graduation Rate Below 67%", "Lowest 5%"),
+               School = str_c(schoolname, districtname, sep = ",\n ") ,
+               ind = recode(ind, "chronic" = "abs")
+               )
+
+
+
+ggplot(CSI.list3, aes(ind   , fct_rev(School)     ,  fill = color.factor )) + 
+         geom_rect(data = CSI.list3, aes(fill =  Reason , alpha = 0.3) ,xmin = -Inf,xmax = Inf,
+                   ymin = -Inf,ymax = Inf) +
+        geom_tile(colour = "white") +
+        geom_text(aes(label=ind)) +
+        facet_wrap( fct_rev(Reason) ~.) +
+        scale_fill_manual(values = pal) +
+        theme_hc() +
+        theme(
+                legend.position = "none",
+                axis.text.x = element_blank(),
+                axis.ticks.x = element_blank(),
+                strip.background = element_rect(fill = "black"),
+                strip.text = element_text(colour = 'white'),
+        ) +
+        labs(x="Dashboard Indicators",
+             y="",
+             title = "Dashboard Indicators for CSI Schools", 
+             subtitle="", 
+             fill="")
+
+
+```
+
+
+### Math Two Year {data-height=600}
+
+```{r fig.width=10,fig.height=6}
+
+
+
+sbac2016 <- read_delim( here("data",  "sb_ca2016_1_csv_v3.txt"), delim = ",") %>% select(`County Code`,`District Code`, `School Code`, `Test Year`, `Subgroup ID`, `Test Id`, Grade, `Percentage Standard Met and Above` )
+
+sbac2017 <- read_delim( here("data", "sb_ca2017_1_csv_v2.txt"), delim = ",") %>% select(`County Code`,`District Code`, `School Code`, `Test Year`, `Subgroup ID`, `Test Id`, Grade, `Percentage Standard Met and Above` )
+
+sbac2018 <- read_delim( here("data", "sb_ca2018_1_csv_v3.txt"), delim = ",") %>% select(`County Code`,`District Code`, `School Code`, `Test Year`, `Subgroup ID`, `Test Id`, Grade, `Percentage Standard Met and Above` )
+
+
+
+
+sbac.all <- sbac2016 %>% rbind(sbac2017) %>% rbind(sbac2018)
+
+local.test <- sbac.all %>% 
+        filter(
+  #              `District Code` %in% c("66159", "66068" ),
+  #             `School Code`== "0000000",
+               Grade == "13", # All grades 
+               `Subgroup ID` == "1", # All students 
+               `Test Id` == "2",  # Math
+  #             `Subgroup ID` %in% c("8","180","120","142") 
+               ) %>% 
+        mutate(`Percentage Standard Met and Above` = as.numeric(`Percentage Standard Met and Above`) ) %>%
+        select(-Grade, -`Subgroup ID`,-`Test Id`) %>%
+        spread(key = `Test Year` , value = `Percentage Standard Met and Above`)
+
+
+sba.entity <- read_delim(here("data", "sb_ca2018entities_csv.txt"), delim = ",") %>%
+        select(`County Code`,`District Code`, `School Code`, `County Name`,`District Name`, `School Name`) #%>% 
+     #   filter(`County Code` %in% c("00", "27"))
+
+math.local <- local.test %>%
+        left_join(sba.entity) %>%
+        mutate(`2017` = round(`2017`,digits = 1),
+               `2018` = round(`2018`,digits = 1),
+               two.year.change = `2018` - `2016`,
+               `School Name` = if_else(`School Code` == "0000000", "District", `School Name`),
+               usename = paste0(`District Name`)) %>%
+#               usename = paste0(`School Name`, "\n",`District Name`)) %>%
+        mutate(cds = str_c( str_pad(  as.character(`County Code`) , width = 2, side = "left", pad = "0"  ) ,
+                            str_pad(  as.character(`District Code`), width = 5, side = "left", pad = "0"  ) ,
+                            str_pad( as.character(`School Code`), width = 7, side = "left", pad = "0"  )  )
+        ) 
+        
+
+
+
+
+
+
+EL.schools <-read.delim(here("data",  "LtelDownload.txt"))
+
+EL.schools <- EL.schools %>% 
+        mutate_at(vars(ends_with("Code")), funs(as.double(.) ) ) %>%
+        mutate_at(vars(ends_with("Code")), funs(if_else( is.na(.), 0, .) ) ) %>%
+        # filter(str_detect(SchoolName, "Monte Bella")) %>%
+        mutate(cds = str_c( str_pad(  as.character(CountyCode) , width = 2, side = "left", pad = "0"  ) ,
+                            str_pad(  as.character(DistrictCode), width = 5, side = "left", pad = "0"  ) ,
+                            str_pad( as.character(SchoolCode), width = 7, side = "left", pad = "0"  )  )
+        ) %>%  # current EL
+        filter(Gender == "ALL") %>%
+        #        filter(str_detect(CountyName , "Monterey") ) %>%
+        group_by(cds) %>%
+        mutate(sumEL = sum(EL),
+               sumTotal = sum(TotalEnrollment),
+               ELpercent = sumEL/sumTotal) %>%
+        select(CountyCode,DistrictCode,SchoolCode,DistrictName,SchoolName, Charter, cds, ELpercent) %>%
+        ungroup() %>%
+        distinct() 
+
+
+frpm1718 <- read_excel(here("data", "frpm1718.xlsx"), sheet = "FRPM School-Level Data ", range = "A2:AB10477") %>% 
+        mutate(cds = str_c(`County Code`,`District Code`,`School Code`)) %>%
+        select(`County Code`,`District Code`,`School Code`, cds, starts_with("Percent"), `High Grade`   ) %>%
+        select(cds, 6, `High Grade` ) 
+
+frpm1718.county <- read_excel(here("data", "frpm1718.xlsx"), sheet = "FRPM School-Level Data ", range = "A2:AB10477") %>% 
+        select(`County Name`, starts_with("Enroll"), starts_with("FRPM")) %>%
+        select(1,2,4)
+
+
+colnames(frpm1718.county) <- (c("county", "enrollment", "frpm"))
+
+frpm1718.county <- frpm1718.county %>%
+        group_by(county) %>%
+        mutate(total.enroll = sum(enrollment),
+               total.frpm = sum(frpm),
+               frpm.rate = total.frpm/total.enroll) %>%
+        select(county, total.enroll, frpm.rate) %>%
+        distinct()
+
+
+
+colnames(frpm1718) <- (c("cds", "frpm", "highgrade"))
+
+
+school.EL.FRPM <- EL.schools %>% left_join(frpm1718) # %>% mutate(cds = as.numeric(cds))
+
+
+
+math.local <- math.local %>% left_join(school.EL.FRPM, by = c("cds" = "cds"))
+
+
+
+
+
+
+three.pt.dumbbell.no <- function(df, title) {
+        
+         ggplot(df, aes(x=`2016`/100, xend = `2018`/100, y = fct_reorder( usename,two.year.change) ) ) +
+                geom_dumbbell(color= "grey" ,       #  "#a3c4dc", 
+                              size=1.5, 
+                              colour_x = "red",
+                              colour_xend = "dark blue"         #"#0e668b"
+                ) +
+                geom_dumbbell(aes(x=`2016`/100, xend = `2017`/100),
+                              color= "grey" ,       #  "#a3c4dc", 
+                              size=1.5, 
+                              colour_x = "red",
+                              colour_xend = "orange"         #"#0e668b"
+                ) +
+                theme_hc() +
+                scale_x_continuous(labels = percent ) +
+                labs(y="",
+                     x="",
+                     title = paste0(title," Change in Math \nPercent Meeting or Exceeding \nfrom 2015-16 to 2017-18")
+                ) +
+                geom_text(color="red", size=3, vjust=1.5,
+                          aes(x=`2016`/100, label=`2016`))+
+                geom_text(color="orange", size=3, vjust=1.5,
+                          aes(x=`2017`/100, label=`2017`))+
+                geom_text(aes(x=`2018`/100, label=`2018`), 
+                          color="dark blue", size=3, vjust=-0.5)
+}        
+        # ggsave(here("figs", paste0(title, " Change in Math Percent Meeting or Exceeding.png") ), height = 6 ) 
+
+        math.local %>%
+        arrange(desc(two.year.change)) %>%
+        filter(
+                `County Code` == "27",
+               `School Code` == "0000000",
+               !is.na(`District Name`),
+               !str_detect(`District Name`, "Big Sur")
+               ) %>%
+        three.pt.dumbbell.no("Monterey District")
+        
+        
+
+
+
+
+
+```
+
+
+
+### Chronic Absenteeism {data-height=800}
+
+```{r fig.width=14,fig.height=8}
+
+# https://caaspp.cde.ca.gov/sb2018/research_fixfileformat18
+
+sbac2018 <- read_delim( here("data", "sb_ca2018_all_27_csv_v3.txt"), delim = ",") %>% 
+        select(`County Code`,`District Code`, `School Code`, `Test Year`, `Subgroup ID`,`Students Tested` , `Test Id`, Grade, `Percentage Standard Met and Above` ) %>%
+        mutate(`County Code` = as.character(`County Code`))
+
+
+subgroups <- tribble(~Subgroup,~`Subgroup ID`,
+                     'All Students',	1,
+                     "Male",	3,
+                     "Female",	4,
+                     "Fluent English proficient and English only",	6,
+                     "Initial fluent English proficient (IFEP)",	7,
+                     "Reclassified fluent English proficient (RFEP)" ,	8,
+                     "English only",	180,
+                     "English learner",	160,
+                     "English learners (ELs) enrolled in school in the U.S. fewer than 12 months",	120,
+                     "English learners enrolled in school in the U.S. 12 months or more",	142,
+                     "Ever-ELs",	170,
+                     "To be determined (TBD)",	190,
+                     "Economically disadvantaged",	31,
+                     "Not economically disadvantaged",	111,
+                     "Black or African American Economically Disadvantaged",	200,
+                     "American Indian or Alaska Native Economically Disadvantaged",	201,
+                     "Asian Economically Disadvantaged",	202,
+                     "Filipino Economically Disadvantaged",	203,
+                     "Hispanic or Latino Economically Disadvantaged",	204,
+                     "Native Hawaiian or Pacific Islander Economically Disadvantaged",	205,
+                     "White Economically Disadvantaged",	206,
+                     "Two or more races Economically Disadvantaged",	207,
+                     "Black or African American Not Economically Disadvantaged",	220,
+                     "American Indian or Alaska Native Not Economically Disadvantaged",	221,
+                     "Asian Not Economically Disadvantaged",	222,
+                     "Filipino Not Economically Disadvantaged",	223,
+                     "Hispanic or Latino Not Economically Disadvantaged",	224,
+                     "Native Hawaiian or Pacific Islander Not Economically Disadvantaged",	225,
+                     "White Not Economically Disadvantaged",	226,
+                     "Two or more races Not Economically Disadvantaged",	227,
+                     "Students with disability",	128,
+                     "Students with no reported disability",	99,
+                     "Black or African American",	74,
+                     "American Indian or Alaska Native",	75,
+                     "Filipino",	77,
+                     "Hispanic or Latino",	78,
+                     "White",	80,
+                     "Asian",	76,
+                     "Native Hawaiian or Pacific Islander",	79,
+                     "Two or more races",	144,
+                     "Not a high school graduate",	90,
+                     "High school graduate",	91,
+                     "Some college (includes AA degree)",	92,
+                     "College graduate",	93,
+                     "Graduate school/Post graduate",	94,
+                     "Declined to state",	121,
+                     "Migrant education",	28
+                     
+) %>%
+        mutate(Subgroup = fct_inorder(Subgroup))
+
+
+
+sba.entity <- read_delim(here("data", "sb_ca2018entities_csv.txt"), delim = ",") %>%
+        select(`County Code`,`District Code`, `School Code`, `County Name`,`District Name`, `School Name`) #%>% 
+#   filter(`County Code` %in% c("00", "27"))
+
+local <- sbac2018 %>%
+        left_join(sba.entity) %>% 
+        left_join(subgroups)
+
+
+
+i <- "Soledad"
+
+
+        small <- local %>% filter(str_detect(`District Name`,i),
+                                  Grade == "13", # All grades )
+                                  `School Code` != "0000000"
+        ) %>%
+                mutate(`Percentage Standard Met and Above` = as.numeric(`Percentage Standard Met and Above`) ,
+                       test = if_else(`Test Id` == 1, "ELA", "Math")) %>%
+                na.omit()  %>%
+                mutate(usesubgroup = paste0(Subgroup,"\n(",`Students Tested`,")") )
+        
+        ht <- length( unique( small$Subgroup ) ) /3
+        
+         wid <- length( unique( small$`School Name` ) ) + 4
+        
+        ggplot(small, aes(  `School Name`, fct_rev( Subgroup),  fill = `Percentage Standard Met and Above` )) + 
+                geom_tile(colour = "white") +
+                facet_wrap(~test) +
+                geom_text(aes(label= percent( `Percentage Standard Met and Above`/100)), size = 3) +
+                #       scale_x_discrete(labels = xlabs) +
+                theme_hc() +
+                scale_fill_gradient( high = "light yellow", low = "blue" )+
+                theme(
+                        legend.position = "none",
+                        axis.ticks.x = element_blank(),
+                        strip.background = element_rect(fill = "black"),
+                        strip.text = element_text(colour = 'white'),
+                        axis.text.x = element_text(angle = 45, hjust = 1)
+                ) +
+                labs(x="",
+                     y="",
+                     title = paste0(i, " Percent Meeting or Exceeding Standard \n by Subgroup in 2017-18"), 
+                     subtitle="", 
+                     fill="")
+
+
+```
+
+
+
+
+
+
+
+Page 2: Core Dashboard
+============================================
+
+
+Column {data-width=100}
+-------------------------------------
+
+The establishment and roll-out of the CORE Dashboard was a significant undertaking.  There are currently 16 districts with signed joinders.  The majority of them have data uploaded into CORE and growth measures calculated.  In addition to trainings done at the Instructional Leaders Network, in person trainings for principals, academic coachs and other district leaders have been provided for Salinas City Elementary School District and Carmel Unified School District.    
+
+
+Column
+-------------------------------------
+
+
+### CORE Dashboard
+
+```{r, out.width='25%', fig.align='center', fig.cap='...'}
+knitr::include_graphics(here("img","CORE.png"))
+```
+
+
+### Training Powerpoint
+
+The training powerpoint can be found here: https://drive.google.com/open?id=1hxpcvFW55BV0-GXhKtfQLaVDhPdH6T0-
+
+### Districts with Signed Joinder
+
+Alisal USD
+
+Carmel USD
+
+Chualar USD
+
+International School of Monterey
+
+King City USD
+
+MCOE Alt. Ed.
+
+Mission Union
+
+Monterey Peninsula USD
+
+Pacific Grove USD
+
+Salinas City ESD
+
+Salinas Union HSD
+
+Santa Rita Union
+
+SMCJUHS
+
+Soledad Unified
+
+Spreckels Union
+
+Washington Union
+
+
+
+https://dashboard.coredistricts.org/dashboard/core
+
+Page 3: Mapping Indicators
+============================================
+
+
+Column {data-width=100}
+-------------------------------------
+
+Maps have been created to visually display information in a way that can highlight disparities and to which viewers can better relate.  In additions the maps are interactive and the viewer and zoom into areas they are most interested in.
+
+The first map shows ELA, Math, Chronic Absenteeism and Suspensions for feeder schools into Salinas Union High School District.  The colors show the gradation on the percentage of students who meet or exceed standards on ELA.  
+
+The second map shows the estimated life expectancy at birth for census tracts in the United States for 2010-2015. In Monterey County, Downtown Salinas has the shortest estimate at 73.3.  Downtown Monterey has the longest at 86.7.
+
+Almost any data source that is associated with a zip code, census tract, school or district can be mapped moving forward.  
+
+
+Column
+-------------------------------------
+
+### Percent of Students Meeting or Exceeding on ELA
+
+```{r include=FALSE}
+
+
+
+schools <-read.delim(here("data","pubschls.txt"))
+
+monterey_schools <- schools %>%
+        filter(County == "Monterey",
+               Latitude != "No Data",
+               StatusType == "Active") %>% 
+        select(NCESDist,NCESSchool ,CDSCode,District, School, GSserved, Latitude, Longitude) %>%
+        mutate(GEOID = as.character(NCESDist),
+               CDSCode = as.character(CDSCode),
+               ncessch = str_c(NCESDist,NCESSchool),
+               isdistrict = if_else(School == "No Data", 1,0)
+               ) 
+
+
+
+
+### Get geography for tracts and county of monterey and only use the land areas  ------------
+
+monterey_tracts <- tracts("CA", "Monterey", class = "sf") %>%
+        filter(ALAND > 0) %>% 
+        st_as_sf(monterey_tracts) %>%
+        st_transform(4269) %>% st_union()
+
+
+monterey_county <- counties("CA", class = "sf") %>%
+        filter(NAME == "Monterey")  %>%
+        st_transform(4269)
+
+
+
+### Establish local school boundaries shapefiles -------
+
+# From National Center for Education Statistics, School Attendance Boundary Survey
+# https://nces.ed.gov/programs/edge/SABS
+#  Also relevant information for school lat/lon:  https://nces.ed.gov/programs/edge/Geographic/SchoolLocations
+primary <- st_read(here("data","SABS_1516_Primary.shp"))
+
+primary.ca <- primary %>%
+        filter(stAbbrev == "CA") %>%
+        st_transform(4269)
+
+monterey_primary <- primary.ca %>%
+        st_intersection(monterey_tracts)
+
+
+### Functions ------
+
+join.map <- function(file){
+        
+        feeders <- read_csv( file) %>%
+                mutate(CDSCode = as.character(CDSCode))
+        
+        
+        joint <- monterey_schools %>%
+                left_join(feeders)
+        
+        joint2 <- monterey_primary  %>%
+                left_join(joint) %>%
+                filter(isdistrict == 0,
+                       !str_detect(SchoolName,"Boronda Elem")) %>%
+                select(SchoolName,
+                       District,
+                       Grades = GSserved,
+                       Chronic = ChronicAbsenteeismRate,
+                       ELA,
+                       Math,
+                       Suspension = `Suspension Rate (Total)`  ,
+                       geometry) %>%
+                mutate(District = fct_drop(District),
+                       Grades = fct_drop(Grades)) %>%
+                filter(Grades %notin% c("K-5", "K-3", "4-5") )
+}
+
+make.maps <- function(file, districtname, groupy ,centerpoint){
+        
+        joint2<- join.map(file)
+        
+        
+        for( i in c("ELA", "Math", "Chronic", "Suspension")){
+                map.ela <- tm_shape(joint2) +
+                        tm_fill(i, alpha = .5, popup.vars = c("District", "Grades" ,"ELA", "Math", "Chronic", "Suspension")) +
+                        tm_borders() +
+                        tm_text("SchoolName", auto.placement = TRUE) +
+                        tm_view(set.view = centerpoint)
+                
+                tmap_save(map.ela, here("maps", paste0("map-",districtname,"-",groupy ,"-" ,i,".html")))
+        }
+        
+        
+}
+
+
+
+###  Join School data ------
+
+joint2 <- join.map(here("data","Feeder Districts Salinas Union ALL.csv") )
+
+
+
+
+
+tmap_mode("view")
+```
+
+
+```{r fig.width=11, fig.height=10}
+
+
+tm_shape(joint2) +
+        tm_fill("ELA", alpha = .5, popup.vars = c("District","Grades","ELA", "Math", "Chronic", "Suspension")) +
+        tm_borders() +
+        tm_text("SchoolName", auto.placement = TRUE) +
+        tm_view(set.view = c(lat = 36.68 , lon = -121.65 ,  zoom = 13))
+
+
+```
+
+
+### Life Expectancy for Blue Zones  
+
+
+```{r map-back, include=FALSE}
+
+tracts <- read_csv(here::here("data","CA_A.CSV"))
+
+mry.life <- tracts %>% filter(CNTY2KX == "053")
+
+
+### Get geography for tracts and county of monterey and only use the land areas  ------------
+
+monterey_tracts <- tracts("CA", "Monterey", class = "sf") %>%
+  filter(ALAND > 0) %>% 
+  st_as_sf(monterey_tracts) %>%
+  st_transform(4269) 
+
+
+monterey_tracts_life <- monterey_tracts %>%
+  left_join(mry.life, by = c("GEOID" = "Tract ID") ) 
+
+tmap_mode("view")
+```
+
+
+
+```{r map2}
+tm_shape(monterey_tracts_life) +
+  tm_polygons("e(0)", id = "e(0)"  ,popup.vars = TRUE, alpha = .7, palette = viridisLite::viridis(9)) +
+  tm_borders() +
+  tm_view(set.view = c(lat = 36.68 , lon = -121.65 ,  zoom = 10))
+
+
+```
+
+
+
+Page 4: Exploratory Data - Twitter
+==============================
+
+
+Column {data-width=100}
+-------------------------------------
+
+This page displays some exploratory data work.  In this case looking at Twitter data.  
+
+The first graph displays the most commonly used words by user since the start of 2019.  
+
+The second graph is an interactive network analysis looking at the connection between users.  In this particular case it shows any tweets from the past week that use the word "MCOE" and then displays who is retweeting whom.  The arrow points from who is retweeting to the original tweeter.  The size of the nodes and thickness of the lines indicate higher levels of retweets.  The viewer can zoom in, rearrange the layout, and select or hover over individuals of interest to see their connections.    
+
+
+Column
+-------------------------------------
+
+### Top Words
+
+```{r fig.width=10, fig.height=6}
+
+
+#  Get Ed Services Tweets 
+eds <- get_timeline(c(
+  "pk12innovation",
+  "ElGovEcon",
+  "MCOE_Now",
+  "adoptedelf",
+  "MCOE_ELA",
+  "WilliamFranzell",
+  "denisebgreen"
+  ), n = 2000, since_id = "1079885245099388928")
+
+
+stop <- get_stopwords()
+stopwords <- stop$word
+
+
+remove_reg <- "&amp;|&lt;|&gt;"
+
+
+
+text <- eds %>%
+  select(text, screen_name, retweet_status_id) %>%
+  mutate(line = row_number()) 
+
+tidy.df <- text %>%
+  filter(is.na(retweet_status_id) ) %>%  #removes retweets 
+  select(-retweet_status_id) %>%
+  mutate(text = str_remove_all(text, remove_reg)) %>%  # removes ampersands
+  unnest_tokens(word, text, token = "tweets") %>%
+  filter(!str_detect(word,"t.co")) %>%   # remove urls
+  filter(!word %in% stop$word) %>%
+  left_join(emojis, by = c("word" = "code")) %>% # replaces emojis with descriptive name in < > 
+  mutate(word = case_when(is.na(description) ~ word,
+                              !is.na(description) ~ paste0("<",description,">")) )
+
+top.words <- tidy.df %>%
+  anti_join(stop) %>%
+  count(screen_name, word, sort = TRUE) %>%
+  arrange(-n)
+
+
+
+top.words %>%
+  group_by(screen_name) %>%
+  top_n(10) %>%
+  ungroup %>%
+  ggplot(aes(fct_reorder(word, n),
+             n, 
+             fill = screen_name)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  facet_wrap(~screen_name, scales = "free") +
+  theme_hc() +
+  scale_fill_few("Medium") +
+  labs(x = "",
+       y = "")
+
+
+
+```
+
+### Network Analysis
+
+```{r}
+
+MCOE_now <- search_tweets("MCOE", n=1500)
+
+
+retweet <-  function(data){
+
+step1 <- # if_else(type == "retweet", 
+  
+# Retweets
+data %>%
+  filter(lang %in% c("en","es","und")) %>%
+  select(screen_name, retweet_screen_name) %>%
+  na.omit() %>%
+  group_by(screen_name, retweet_screen_name)#,
+
+# # Mentions
+# data %>%
+#   select(screen_name, mentions_screen_name) %>%
+#   unnest(mentions_screen_name) %>% 
+#   filter(!is.na(mentions_screen_name)) %>% 
+#   group_by(screen_name, mentions_screen_name) 
+# )
+
+
+rt_g <-  step1 %>%
+  mutate(weight = n()) %>%
+  distinct() %>% 
+  graph_from_data_frame(directed = TRUE)  
+
+
+V(rt_g)$label.cex <- unname(ifelse(degree(rt_g)[V(rt_g)] > 1, log(degree(rt_g))*.3, .5))
+V(rt_g)$size <- unname(ifelse(degree(rt_g)[V(rt_g)] > 2, degree(rt_g)/2, 1)) 
+E(rt_g)$width <- E(rt_g)$weight
+set.graph.attribute(rt_g, name = "main", value = "Title Me")
+
+visIgraph(rt_g) %>% 
+  visEdges(color = list(hover = "darkblue", highlight = "red")) %>%
+  visNodes(color = list(hover = "darkblue", highlight = "red")) %>%
+  visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
+  visInteraction(hover = TRUE)
+
+}
+
+
+retweet(MCOE_now)
+
+
+```
+
